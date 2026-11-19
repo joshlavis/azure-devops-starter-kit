@@ -1,0 +1,80 @@
+# Container Apps auto-deploy with GitHub OIDC (no stored secrets):
+# test -> build -> Trivy scan -> push to ACR by digest -> deploy -> smoke test -> auto-rollback
+name: container-app
+
+on:
+  push:
+    branches: [main]
+    paths: ["app/**", ".github/workflows/container-app.yml", "scripts/ci/**"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: container-app-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  WORKLOAD: demo # must match -w in bootstrap/setup-azure.sh
+  IMAGE_NAME: web
+  TRIVY_VERSION: 0.76.2
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - working-directory: app
+        run: |
+          npm run lint
+          npm test
+      - name: Lint Dockerfile + scripts
+        run: |
+          docker run --rm -i hadolint/hadolint:v2.15.1 < app/Dockerfile
+          shellcheck bootstrap/*.sh scripts/ci/*.sh
+
+  deploy-dev:
+    if: github.event_name != 'pull_request'
+    needs: test
+    runs-on: ubuntu-latest
+    environment: dev
+    permissions:
+      contents: read
+      id-token: write # lets the job request a GitHub OIDC token
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Azure login (OIDC, no secrets)
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Build
+        run: docker build -t "local/${IMAGE_NAME}:${GITHUB_SHA}" app
+
+      - name: Trivy scan (fail on fixable HIGH/CRITICAL)
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+            "aquasec/trivy:${TRIVY_VERSION}" image --exit-code 1 --ignore-unfixed \
+            --severity HIGH,CRITICAL --no-progress "local/${IMAGE_NAME}:${GITHUB_SHA}"
+
+      - name: Push to ACR by digest
+        id: push
+        run: |
+          eval "$(scripts/ci/find-resources.sh "$WORKLOAD" dev)"
+          az acr login --name "$ACR_NAME"
+          REF="${ACR_LOGIN_SERVER}/${IMAGE_NAME}:${GITHUB_SHA}"
+          docker tag "local/${IMAGE_NAME}:${GITHUB_SHA}" "$REF"
+          docker push "$REF"
+          echo "digest_ref=$(docker inspect --format '{{index .RepoDigests 0}}' "$REF")" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy + smoke test (auto-rollback on failure)
+        run: scripts/ci/deploy-containerapp.sh "$WORKLOAD" dev "${{ steps.push.outputs.digest_ref }}" "${GITHUB_SHA::7}"

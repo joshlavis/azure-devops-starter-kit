@@ -1,0 +1,17 @@
+{
+  "name": "starter-web",
+  "version": "1.0.0",
+  "description": "Tiny zero-dependency Node.js web API used by the Azure DevOps starter kit.",
+  "main": "src/server.js",
+  "private": true,
+  "license": "MIT",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "lint": "node --check src/server.js && node --check src/app.js",
+    "test": "node --test test/*.test.js"
+  }
+}

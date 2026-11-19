@@ -62,7 +62,7 @@ Cost: the Basic container registry is about $5/month (West US 3 list price, Nov 
 
 ![Full kit architecture](docs/img/full-kit-architecture.png)
 
-👉 **Get the full kit: GUMROAD_LINK_HERE**
+👉 **Get the full kit: https://joshwave313.gumroad.com/l/azure-devops-starter-kit**
 
 ## License
 
